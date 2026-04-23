@@ -8,6 +8,14 @@
 - 生成 side-by-side 同页对照
 - 翻译完成后可自动打开结果附件
 
+### 翻译效果
+
+![翻译效果](docs/images/translation-result.png)
+
+### 任务管理
+
+![任务管理](docs/images/task-manager.png)
+
 ## 当前实现
 
 - 右键条目/附件，直接触发 PDF 翻译
