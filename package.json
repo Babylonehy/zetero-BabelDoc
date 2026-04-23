@@ -1,0 +1,42 @@
+{
+  "name": "zotero-babeldoc-sidebyside",
+  "type": "module",
+  "version": "0.1.3",
+  "description": "A Zotero 8/9 plugin that runs BabelDOC locally and imports side-by-side bilingual PDFs back into Zotero.",
+  "keywords": [
+    "zotero",
+    "babeldoc",
+    "pdf",
+    "translation",
+    "plugin"
+  ],
+  "config": {
+    "addonName": "BabelDOC Side-by-Side",
+    "addonID": "babeldoc-sidebyside@codex.local",
+    "addonRef": "babeldocsidebyside",
+    "addonInstance": "BabelDocSideBySide",
+    "prefsPrefix": "extensions.zotero.babeldocsidebyside",
+    "xpiName": "zotero-babeldoc-sidebyside"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/funstory-ai/BabelDOC.git"
+  },
+  "author": "OpenAI Codex",
+  "homepage": "https://github.com/funstory-ai/BabelDOC",
+  "license": "AGPL-3.0-or-later",
+  "scripts": {
+    "start": "zotero-plugin serve",
+    "build": "zotero-plugin build && tsc --noEmit && node scripts/fix-manifest.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zotero-plugin-toolkit": "^5.1.0-beta.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "zotero-plugin-scaffold": "^0.8.2",
+    "zotero-types": "^4.1.0-beta.4"
+  }
+}

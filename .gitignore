@@ -1,0 +1,9 @@
+node_modules
+build
+dist
+.DS_Store
+.env
+.scaffold
+.claude
+.qoder
+*.xpi
