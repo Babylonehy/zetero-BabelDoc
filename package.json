@@ -20,10 +20,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/funstory-ai/BabelDOC.git"
+    "url": "git+https://github.com/Babylonehy/zetero-BabelDoc.git"
   },
-  "author": "OpenAI Codex",
-  "homepage": "https://github.com/funstory-ai/BabelDOC",
+  "author": "Babylonehy",
+  "homepage": "https://github.com/Babylonehy/zetero-BabelDoc",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "start": "zotero-plugin serve",

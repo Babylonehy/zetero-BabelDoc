@@ -7,8 +7,8 @@ export default defineConfig({
   name: pkg.config.addonName,
   id: pkg.config.addonID,
   namespace: pkg.config.addonRef,
-  updateURL: "https://example.com/zotero-babeldoc-side-by-side/update.json",
-  xpiDownloadLink: "https://example.com/zotero-babeldoc-side-by-side/babel-doc-side-by-side.xpi",
+  updateURL: "https://raw.githubusercontent.com/Babylonehy/zetero-BabelDoc/main/update.json",
+  xpiDownloadLink: "https://github.com/Babylonehy/zetero-BabelDoc/releases/download/v{{version}}/babel-doc-side-by-side.xpi",
   build: {
     assets: ["addon/**/*.*"],
     define: {

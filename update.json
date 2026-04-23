@@ -1,0 +1,17 @@
+{
+  "addons": {
+    "babeldoc-sidebyside@codex.local": {
+      "updates": [
+        {
+          "version": "0.1.3",
+          "update_link": "https://github.com/Babylonehy/zetero-BabelDoc/releases/download/v0.1.3/babel-doc-side-by-side.xpi",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "8.0.5"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
