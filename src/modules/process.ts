@@ -77,7 +77,7 @@ export async function runCommand(
     });
 
     try {
-      process.runwAsync(args, observer, false);
+      process.runwAsync(args, args.length, observer, false);
     } catch (error) {
       finish(reject, error as Error);
     }

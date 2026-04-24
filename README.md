@@ -1,6 +1,6 @@
 # Zotero BabelDOC Side-by-Side
 
-一个面向 `Zotero 8.0.5 ~ 9.*` 的本地插件。它参考 `immersive-translate/zotero-immersivetranslate` 的交互路线，但去掉授权码和会员依赖，直接从 Zotero 里调用本机 `babeldoc` CLI，把生成的双语 PDF 再导回 Zotero。
+一个面向 `Zotero 8.0.5 ~ 9.*` 的本地翻译插件。直接从 Zotero 里调用本机 `babeldoc` CLI，把生成的双语 PDF 再导回 Zotero。
 
 默认输出模式是 BabelDOC 的双语对照 PDF：
 
@@ -35,7 +35,7 @@
 - 翻译结果自动导入 Zotero，并挂回原条目下
 - 任务记录持久化到 Zotero 数据目录
 - 失败任务可在任务管理器里重试
-- 不需要授权码，直接配置自定义模型
+- 用户自行配置 OpenAI 兼容模型，无第三方服务依赖
 
 ## 依赖
 
@@ -107,3 +107,12 @@ npm run build
 
 - 插件本身不内置 Python/BabelDOC，需要本机已有可运行命令
 - 自动更新地址已置空，当前版本按本地手动安装/更新方式使用
+
+## 致谢 / References
+
+本项目在开发过程中参考了以下开源项目的交互设计与插件架构：
+
+- [immersive-translate/zotero-immersivetranslate](https://github.com/immersive-translate/zotero-immersivetranslate) — 参考了其 Zotero 插件的 UI 交互流程与菜单结构设计
+- [windingwind/zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) — Zotero 插件脚手架模板
+- [BabelDOC](https://github.com/funstory-ai/BabelDOC) — 底层 PDF 双语翻译引擎（本插件通过 CLI 调用）
+- [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) — Zotero 插件开发工具库

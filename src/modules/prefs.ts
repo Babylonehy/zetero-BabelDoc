@@ -7,6 +7,8 @@ const DEFAULT_OPENAI_BASE_URL = `${DEFAULT_OPENAI_BASE_URL_ROOT}${DEFAULT_OPENAI
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_REQUEST_RETRY_COUNT = 3;
 const API_TEST_MAX_RETRIES = 3;
+const MODEL_DISCOVERY_MAX_CONCURRENCY = 3;
+const MODEL_DISCOVERY_TIMEOUT_MS = 15000;
 const BASE_URL_SUFFIX_OPTIONS = [
   { value: DEFAULT_OPENAI_BASE_URL_SUFFIX, label: "/v1" },
   { value: "/openai/v1", label: "/openai/v1" },
@@ -26,6 +28,24 @@ const DEFAULT_SYSTEM_PROMPT = [
   "6. Make the translation natural, precise, and publication-ready in the target language."
 ].join("\n");
 const API_TEST_PROMPT = "Reply with OK only.";
+const MODEL_DISCOVERY_PROMPT =
+  "Translate to Simplified Chinese: Published as a conference paper at ICLR 2026";
+
+type ModelProbeStatus =
+  | "available"
+  | "compatible"
+  | "unsupported"
+  | "unavailable";
+
+interface ModelCatalogEntry {
+  id: string;
+}
+
+interface ModelProbeResult {
+  id: string;
+  status: ModelProbeStatus;
+  summary: string;
+}
 
 export interface BabelDocSettings {
   command: string;
@@ -240,7 +260,10 @@ export async function configureSettingsInteractively(win?: Window) {
       ...current,
       openaiBaseURLSuffixPreset: storedSuffix.preset,
       openaiBaseURLSuffixCustom: storedSuffix.custom,
-      apiTestStatus: "尚未测试。"
+      apiTestStatus: "尚未测试。",
+      modelDiscoveryStatus: "尚未获取模型列表。",
+      detectedModel: current.openaiModel || "",
+      modelOptions: buildModelPickerOptions([], current.openaiModel)
     };
     const dialog = new ztoolkit.Dialog(1, 1);
 
@@ -331,6 +354,11 @@ export async function configureSettingsInteractively(win?: Window) {
               id: `${config.addonRef}-openai-model`,
               value: current.openaiModel
             }),
+            ...makeSelectField("可选模型", "detectedModel", {
+              id: `${config.addonRef}-model-candidate-select`,
+              value: dialogData.detectedModel,
+              options: dialogData.modelOptions
+            }),
             ...makePasswordField("API Key", "openaiApiKey", current.openaiApiKey, {
               id: `${config.addonRef}-openai-api-key`
             }),
@@ -371,6 +399,25 @@ export async function configureSettingsInteractively(win?: Window) {
               value: current.extraArgs
             })
           ]
+        },
+        {
+          tag: "div",
+          namespace: "html",
+          attributes: {
+            id: `${config.addonRef}-model-discovery-status`
+          },
+          properties: {
+            textContent: dialogData.modelDiscoveryStatus
+          },
+          styles: {
+            border: "1px solid #dbe4ee",
+            borderRadius: "10px",
+            background: "#ffffff",
+            padding: "10px 12px",
+            fontSize: "13px",
+            lineHeight: "1.5",
+            color: "#334155"
+          }
         },
         {
           tag: "div",
@@ -433,6 +480,18 @@ export async function configureSettingsInteractively(win?: Window) {
       ]
     })
     .setDialogData(dialogData)
+    .addButton("获取模型列表", "fetch-models", {
+      noClose: true,
+      callback() {
+        void fetchModelsFromDialog(dialog, win);
+      }
+    })
+    .addButton("检测可用模型", "detect-models", {
+      noClose: true,
+      callback() {
+        void detectModelsFromDialog(dialog, win);
+      }
+    })
     .addButton("测试 API", "test-api", {
       noClose: true,
       callback() {
@@ -565,6 +624,7 @@ function attachDerivedFieldListeners(dialog: any) {
     `${config.addonRef}-base-url-suffix-preset`,
     `${config.addonRef}-base-url-suffix-custom`,
     `${config.addonRef}-openai-model`,
+    `${config.addonRef}-model-candidate-select`,
     `${config.addonRef}-openai-api-key`,
     `${config.addonRef}-request-retry-count`
   ];
@@ -579,6 +639,27 @@ function attachDerivedFieldListeners(dialog: any) {
       elem.addEventListener("input", () => refreshDerivedApiFields(dialog));
     }
   }
+
+  const modelSelect = doc.getElementById(
+    `${config.addonRef}-model-candidate-select`
+  ) as HTMLSelectElement | null;
+  const modelInput = doc.getElementById(
+    `${config.addonRef}-openai-model`
+  ) as HTMLInputElement | null;
+  modelSelect?.addEventListener("change", () => {
+    const value = modelSelect.value;
+    if (!value || !modelInput) {
+      return;
+    }
+    modelInput.value = value;
+    dialog.dialogData.openaiModel = value;
+    dialog.dialogData.detectedModel = value;
+    refreshDerivedApiFields(dialog);
+  });
+  modelInput?.addEventListener("input", () => {
+    dialog.dialogData.detectedModel = modelInput.value.trim();
+    syncModelPickerSelection(dialog, modelInput.value.trim());
+  });
 }
 
 function refreshDerivedApiFields(dialog: any) {
@@ -617,6 +698,7 @@ function refreshDerivedApiFields(dialog: any) {
   if (apiTestCommand) {
     apiTestCommand.value = buildApiTestCommand(settings);
   }
+  syncModelPickerSelection(dialog, settings.openaiModel);
 }
 
 async function testApiFromDialog(dialog: any, win?: Window) {
@@ -712,6 +794,219 @@ async function runApiTest(
   throw lastError || new Error("API test failed.");
 }
 
+async function fetchModelsFromDialog(dialog: any, win?: Window) {
+  const doc = dialog.window?.document;
+  if (!doc) {
+    return;
+  }
+
+  syncDialogDataFromDocument(dialog.dialogData, doc);
+  const settings = buildPreviewSettings(dialog.dialogData);
+  refreshDerivedApiFields(dialog);
+
+  if (!settings.openaiBaseURLRoot) {
+    const message = "请先填写 Base URL 主体。";
+    setModelDiscoveryStatus(dialog, message, "danger");
+    Services.prompt.alert(win || null, "BabelDOC 设置", message);
+    return;
+  }
+
+  try {
+    const models = await fetchModelCatalog(settings, (status) => {
+      setModelDiscoveryStatus(dialog, status, "info");
+    });
+    updateModelPickerOptions(
+      dialog,
+      buildModelPickerOptions(
+        models.map((item) => ({
+          value: item.id,
+          label: item.id
+        })),
+        settings.openaiModel
+      ),
+      settings.openaiModel
+    );
+    const message = `已获取 ${models.length} 个模型。可继续点“检测可用模型”筛出更适合 PDF 翻译的模型。`;
+    setModelDiscoveryStatus(dialog, message, "success");
+  } catch (error: any) {
+    const message = `获取模型列表失败。${formatApiTestError(error)}`;
+    setModelDiscoveryStatus(dialog, message, "danger");
+    Services.prompt.alert(win || null, "BabelDOC 设置", message);
+  }
+}
+
+async function detectModelsFromDialog(dialog: any, win?: Window) {
+  const doc = dialog.window?.document;
+  if (!doc) {
+    return;
+  }
+
+  syncDialogDataFromDocument(dialog.dialogData, doc);
+  const settings = buildPreviewSettings(dialog.dialogData);
+  refreshDerivedApiFields(dialog);
+
+  if (!settings.openaiBaseURLRoot) {
+    const message = "请先填写 Base URL 主体。";
+    setModelDiscoveryStatus(dialog, message, "danger");
+    Services.prompt.alert(win || null, "BabelDOC 设置", message);
+    return;
+  }
+
+  try {
+    const models = await fetchModelCatalog(settings, (status) => {
+      setModelDiscoveryStatus(dialog, status, "info");
+    });
+    const modelIDs = models.map((item) => item.id);
+    const results = await probeModelCatalog(settings, modelIDs, (status) => {
+      setModelDiscoveryStatus(dialog, status, "info");
+    });
+    const options = buildDetectedModelOptions(results, settings.openaiModel);
+    updateModelPickerOptions(dialog, options, settings.openaiModel);
+    const availableOptions = results.filter((item) => item.status === "available");
+    const compatibleOptions = results.filter((item) => item.status === "compatible");
+    const message = [
+      `检测完成，共 ${results.length} 个模型。`,
+      `可直接用于翻译: ${availableOptions.length} 个`,
+      compatibleOptions.length
+        ? `可响应但不建议直接做纯翻译: ${compatibleOptions.length} 个`
+        : "",
+      availableOptions.length
+        ? `优先推荐: ${availableOptions.slice(0, 5).map((item) => item.id).join("、")}`
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n");
+    setModelDiscoveryStatus(dialog, message, availableOptions.length ? "success" : "info");
+  } catch (error: any) {
+    const message = `检测模型失败。${formatApiTestError(error)}`;
+    setModelDiscoveryStatus(dialog, message, "danger");
+    Services.prompt.alert(win || null, "BabelDOC 设置", message);
+  }
+}
+
+async function fetchModelCatalog(
+  settings: BabelDocSettings,
+  onProgress: (message: string) => void
+) {
+  const endpoint = `${settings.openaiBaseURL}/models`;
+  onProgress(`正在获取模型列表: GET ${endpoint}`);
+
+  const xhr = await Zotero.HTTP.request("GET", endpoint, {
+    headers: buildApiTestHeaders(settings.openaiApiKey),
+    responseType: "text",
+    successCodes: false,
+    timeout: 30000,
+    errorDelayIntervals: [],
+    errorDelayMax: 0,
+    debug: false,
+    logBodyLength: 0
+  });
+
+  if (xhr.status < 200 || xhr.status >= 300) {
+    throw {
+      status: xhr.status,
+      responseText: xhr.responseText,
+      message: `HTTP ${xhr.status}`
+    };
+  }
+
+  const payload = parseJsonSafely(xhr.responseText);
+  const models = Array.isArray(payload?.data)
+    ? payload.data
+        .map((item: any) => String(item?.id || "").trim())
+        .filter(Boolean)
+        .map((id: string) => ({ id }))
+    : [];
+
+  if (!models.length) {
+    throw new Error("接口没有返回任何模型。");
+  }
+
+  return models as ModelCatalogEntry[];
+}
+
+async function probeModelCatalog(
+  settings: BabelDocSettings,
+  modelIDs: string[],
+  onProgress: (message: string) => void
+) {
+  const results: ModelProbeResult[] = new Array(modelIDs.length);
+  let nextIndex = 0;
+  let completed = 0;
+  const workerCount = Math.max(
+    1,
+    Math.min(MODEL_DISCOVERY_MAX_CONCURRENCY, modelIDs.length)
+  );
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const currentIndex = nextIndex++;
+      if (currentIndex >= modelIDs.length) {
+        return;
+      }
+
+      const modelID = modelIDs[currentIndex];
+      onProgress(`正在检测模型 ${currentIndex + 1}/${modelIDs.length}: ${modelID}`);
+      const result = await probeSingleModel(settings, modelID);
+      results[currentIndex] = result;
+      completed += 1;
+      onProgress(
+        `已检测 ${completed}/${modelIDs.length}: ${modelID} · ${formatModelProbeSummary(result)}`
+      );
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function probeSingleModel(settings: BabelDocSettings, modelID: string) {
+  const endpoint = `${settings.openaiBaseURL}/chat/completions`;
+  try {
+    const xhr = await Zotero.HTTP.request("POST", endpoint, {
+      body: JSON.stringify({
+        model: modelID,
+        messages: [
+          { role: "system", content: API_TEST_PROMPT },
+          { role: "user", content: MODEL_DISCOVERY_PROMPT }
+        ],
+        max_tokens: 48
+      }),
+      headers: buildApiTestHeaders(settings.openaiApiKey),
+      responseType: "text",
+      successCodes: false,
+      timeout: MODEL_DISCOVERY_TIMEOUT_MS,
+      errorDelayIntervals: [],
+      errorDelayMax: 0,
+      debug: false,
+      logBodyLength: 0
+    });
+
+    const payload = parseJsonSafely(xhr.responseText);
+    if (xhr.status < 200 || xhr.status >= 300) {
+      return {
+        id: modelID,
+        status: classifyUnavailableModel(payload, xhr.status),
+        summary: summarizeModelProbeError(xhr.status, xhr.responseText)
+      } satisfies ModelProbeResult;
+    }
+
+    const content = String(payload?.choices?.[0]?.message?.content || "").trim();
+    return {
+      id: modelID,
+      status: looksLikeDirectTranslation(content) ? "available" : "compatible",
+      summary: content || "返回成功，但没有正文内容。"
+    } satisfies ModelProbeResult;
+  } catch (error: any) {
+    const message = error?.message || error?.toString?.() || "请求失败";
+    return {
+      id: modelID,
+      status: "unavailable",
+      summary: message
+    } satisfies ModelProbeResult;
+  }
+}
+
 function buildApiTestHeaders(apiKey: string) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
@@ -720,6 +1015,129 @@ function buildApiTestHeaders(apiKey: string) {
     headers.Authorization = `Bearer ${apiKey.trim()}`;
   }
   return headers;
+}
+
+function classifyUnavailableModel(payload: any, status: number) {
+  const message = String(payload?.error?.message || "").toLowerCase();
+  if (status === 401 || status === 403) {
+    return "unsupported";
+  }
+  if (message.includes("no available channels")) {
+    return "unavailable";
+  }
+  if (status === 503 || status === 504) {
+    return "unavailable";
+  }
+  return "unsupported";
+}
+
+function summarizeModelProbeError(status: number, responseText: string) {
+  const summary = summarizeResponseBody(responseText);
+  return [status ? `HTTP ${status}` : "", summary].filter(Boolean).join(" · ");
+}
+
+function looksLikeDirectTranslation(content: string) {
+  const trimmed = String(content || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (!/[\u3400-\u9fff]/.test(trimmed)) {
+    return false;
+  }
+  return !/(the user wants|let's break down|i need to|translation:|analysis:)/i.test(
+    trimmed
+  );
+}
+
+function formatModelProbeSummary(result: ModelProbeResult) {
+  const prefix =
+    result.status === "available"
+      ? "可用"
+      : result.status === "compatible"
+        ? "可响应"
+        : result.status === "unsupported"
+          ? "受限"
+          : "不可用";
+  return `${prefix} · ${result.summary.replace(/\s+/g, " ").slice(0, 60)}`;
+}
+
+function buildModelPickerOptions(
+  options: Array<{ value: string; label: string }>,
+  currentModel: string
+) {
+  const unique = new Map<string, string>();
+  unique.set("", "手动输入或选择下方模型");
+  if (currentModel && !options.some((option) => option.value === currentModel)) {
+    unique.set(currentModel, `当前模型: ${currentModel}`);
+  }
+  for (const option of options) {
+    if (!option.value) {
+      continue;
+    }
+    unique.set(option.value, option.label);
+  }
+  return Array.from(unique.entries()).map(([value, label]) => ({ value, label }));
+}
+
+function buildDetectedModelOptions(results: ModelProbeResult[], currentModel: string) {
+  const available = results
+    .filter((item) => item.status === "available")
+    .map((item) => ({
+      value: item.id,
+      label: `可用 | ${item.id} | ${item.summary.replace(/\s+/g, " ").slice(0, 36)}`
+    }));
+  const compatible = results
+    .filter((item) => item.status === "compatible")
+    .map((item) => ({
+      value: item.id,
+      label: `可响应 | ${item.id} | ${item.summary.replace(/\s+/g, " ").slice(0, 36)}`
+    }));
+  return buildModelPickerOptions([...available, ...compatible], currentModel);
+}
+
+function updateModelPickerOptions(
+  dialog: any,
+  options: Array<{ value: string; label: string }>,
+  selectedValue: string
+) {
+  dialog.dialogData.modelOptions = options;
+  dialog.dialogData.detectedModel = selectedValue || "";
+  const doc = dialog.window?.document;
+  const select = doc?.getElementById(
+    `${config.addonRef}-model-candidate-select`
+  ) as HTMLSelectElement | null;
+  if (!select) {
+    return;
+  }
+
+  select.replaceChildren(
+    ...options.map((option) => {
+      const elem = doc!.createElement("option");
+      elem.value = option.value;
+      elem.textContent = option.label;
+      elem.selected = option.value === (selectedValue || "");
+      return elem;
+    })
+  );
+  select.value = options.some((option) => option.value === selectedValue) ? selectedValue : "";
+}
+
+function syncModelPickerSelection(dialog: any, selectedValue: string) {
+  const doc = dialog.window?.document;
+  const select = doc?.getElementById(
+    `${config.addonRef}-model-candidate-select`
+  ) as HTMLSelectElement | null;
+  if (!select) {
+    return;
+  }
+  const optionValues = Array.from({ length: select.options.length }, (_unused, index) =>
+    select.options.item(index)?.value || ""
+  );
+  if (optionValues.includes(selectedValue)) {
+    select.value = selectedValue;
+  } else {
+    select.value = "";
+  }
 }
 
 function formatApiTestError(error: any) {
@@ -786,15 +1204,37 @@ function restoreDefaultPrompt(dialog: any) {
 }
 
 function setApiTestStatus(dialog: any, text: string, tone: "info" | "success" | "danger") {
+  setStatusBox(dialog, `${config.addonRef}-api-test-status`, "apiTestStatus", text, tone);
+}
+
+function setModelDiscoveryStatus(
+  dialog: any,
+  text: string,
+  tone: "info" | "success" | "danger"
+) {
+  setStatusBox(
+    dialog,
+    `${config.addonRef}-model-discovery-status`,
+    "modelDiscoveryStatus",
+    text,
+    tone
+  );
+}
+
+function setStatusBox(
+  dialog: any,
+  elementID: string,
+  dialogKey: string,
+  text: string,
+  tone: "info" | "success" | "danger"
+) {
   const doc = dialog.window?.document;
-  const box = doc?.getElementById(`${config.addonRef}-api-test-status`) as
-    | HTMLDivElement
-    | null;
+  const box = doc?.getElementById(elementID) as HTMLDivElement | null;
   if (!box) {
     return;
   }
 
-  dialog.dialogData.apiTestStatus = text;
+  dialog.dialogData[dialogKey] = text;
   box.textContent = text;
   box.style.color =
     tone === "success" ? "#166534" : tone === "danger" ? "#b91c1c" : "#334155";
